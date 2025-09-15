@@ -1,0 +1,172 @@
+import numpy as np
+import csv
+
+# =========================
+# CẤU HÌNH THAM SỐ
+# =========================
+
+BW_TRACE_FILE = "trace4.txt"
+MONITORING_WINDOW = 10
+SEGMENT_DURATION = 1.0
+DEFAULT_BITRATE = 2000.0
+STARTUP_BUF_SEGMENTS = 3
+CSV_OUTPUT_FILE = "simulation_results.csv"
+
+USER_TRACE = [
+    10.63831439, 8.16228623, 8.53394035, 12.29065651, 6.49064811, 7.48425412,
+    4.89629005, 10.42185176, 3.30059146, 4.84032235, 10.28757275, 8.91045952,
+    6.38903484, 6.59948069, 11.4486843
+]
+
+NUM_VIDEOS = len(USER_TRACE)
+K_NEXT = 2  # Số video kế tiếp được nạp trước song song
+
+# =========================
+# HÀM ĐỌC TRACE THÔNG LƯỢNG MẠNG
+# =========================
+def read_bandwidth_trace(file_path):
+    bw = []
+    try:
+        with open(file_path, "r") as f:
+            for line in f:
+                try:
+                    bw.append(float(line.strip()))
+                except ValueError:
+                    bw.append(0.0)
+    except FileNotFoundError:
+        print(f"Lỗi: Không tìm thấy file {file_path}")
+    return bw
+
+# =========================
+# TÍNH THÔNG LƯỢNG TRUNG BÌNH TRONG CỬA SỔ GIÁM SÁT
+# =========================
+def avg_throughput(bw_trace, t_current, window):
+    start = max(0, int(t_current - window))
+    end = min(len(bw_trace), int(t_current))
+    if end <= start:
+        return bw_trace[start] if start < len(bw_trace) else DEFAULT_BITRATE
+    return np.mean(bw_trace[start:end])
+
+# =========================
+# TÍNH BUFFER SAU KHI TẢI SEGMENT MỚI
+# =========================
+def calc_buffer(Bf_prev, segment_duration, video_bitrate, throughput):
+    if throughput <= 0:
+        return segment_duration
+    rebuf = Bf_prev - (segment_duration * video_bitrate / throughput)
+    return segment_duration + max(rebuf, 0)
+
+def calc_startup_delay(user_scroll_time, download_times):
+    return max(download_times) - user_scroll_time
+
+# =========================
+# TÍNH QoE CHO TỪNG VIDEO VÀ TOÀN HỆ
+# =========================
+def calc_qoe(startup_delay, rebuffer_time, waste, alpha=4.3, beta=1.0, gamma=0.5):
+    """
+    QoE tổng quát: QoE = alpha * (playback - rebuffer) - beta * startup_delay - gamma * waste
+    Các hệ số có thể điều chỉnh tuỳ mô hình thực tế.
+    """
+    return - (alpha * rebuffer_time + beta * startup_delay + gamma * waste)
+
+# =========================
+# HÀM MÔ PHỎNG NẠP TRƯỚC PHÂN ĐOẠN VIDEO - BUFFER RIÊNG
+# =========================
+def simulate_prefetch_multi_buffer(user_trace, bw_trace, segment_duration, video_bitrate, monitoring_window, startup_buf_segments, k_next):
+    num_videos = len(user_trace)
+    buf_arr = [0.0 for _ in range(num_videos)]  # buffer riêng cho từng video
+    rebuffer_arr = [0.0 for _ in range(num_videos)]
+    startup_delay_arr = [0.0 for _ in range(num_videos)]
+    waste_arr = [0.0 for _ in range(num_videos)]
+    qoe_arr = [0.0 for _ in range(num_videos)]
+    t_global = 0.0  # Thời gian thực (seconds)
+    results = []
+
+    # Download các segment buffer khởi động cho từng video trước khi phát
+    segment_download_times = [[] for _ in range(num_videos)]
+    scroll_times = [sum(user_trace[:i]) for i in range(num_videos)]  # Giả sử user cuộn tới video này sau khi xem xong video trước
+
+    for vid_idx in range(num_videos):
+        for seg in range(startup_buf_segments):
+            thrp = avg_throughput(bw_trace, t_global, monitoring_window)
+            download_time = segment_duration * video_bitrate / (thrp if thrp > 0 else 1)
+            t_global += download_time
+            buf_arr[vid_idx] = calc_buffer(buf_arr[vid_idx], segment_duration, video_bitrate, thrp)
+            segment_download_times[vid_idx].append(t_global)
+
+    # Tính delay khởi động cho từng video
+    for vid_idx in range(num_videos):
+        startup_delay_arr[vid_idx] = calc_startup_delay(scroll_times[vid_idx], segment_download_times[vid_idx])
+
+    # Phát từng video và nạp trước video kế tiếp
+    for vid_idx in range(num_videos):
+        video_time = user_trace[vid_idx]
+        playback_time = 0.0
+
+        while playback_time < video_time:
+            thrp = avg_throughput(bw_trace, t_global, monitoring_window)
+            # Phát segment nếu đủ buffer
+            if buf_arr[vid_idx] >= segment_duration:
+                buf_arr[vid_idx] -= segment_duration
+                playback_time += segment_duration
+            else:
+                # Rebuffering
+                download_time = segment_duration * video_bitrate / (thrp if thrp > 0 else 1)
+                t_global += download_time
+                rebuffer_arr[vid_idx] += download_time
+                buf_arr[vid_idx] = calc_buffer(0, segment_duration, video_bitrate, thrp)
+            # Nạp trước cho các video kế tiếp (prefetch song song K_NEXT video)
+            for next_idx in range(vid_idx+1, min(vid_idx+1+k_next, num_videos)):
+                if buf_arr[next_idx] < startup_buf_segments * segment_duration:  # Nếu buffer video kế tiếp chưa đủ
+                    thrp_next = avg_throughput(bw_trace, t_global, monitoring_window)
+                    download_time_next = segment_duration * video_bitrate / (thrp_next if thrp_next > 0 else 1)
+                    t_global += download_time_next
+                    buf_arr[next_idx] = calc_buffer(buf_arr[next_idx], segment_duration, video_bitrate, thrp_next)
+        # Waste: buffer dư thừa khi user đã xem hết video
+        waste_arr[vid_idx] = buf_arr[vid_idx]
+        # QoE cho từng video
+        qoe_arr[vid_idx] = calc_qoe(startup_delay_arr[vid_idx], rebuffer_arr[vid_idx], waste_arr[vid_idx])
+
+        results.append({
+            "video_index": vid_idx,
+            "video_duration": video_time,
+            "startup_delay": startup_delay_arr[vid_idx],
+            "rebuffer_time": rebuffer_arr[vid_idx],
+            "waste": waste_arr[vid_idx],
+            "QoE": qoe_arr[vid_idx],
+            "total_time": t_global
+        })
+
+    # QoE tổng thể
+    qoe_total = sum(qoe_arr)
+    print(f"Tổng QoE toàn hệ: {qoe_total:.2f}")
+    return results
+
+def export_results_to_csv(results, csv_file):
+    headers = ["video_index", "video_duration", "startup_delay", "rebuffer_time", "waste", "QoE", "total_time"]
+    with open(csv_file, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=headers)
+        writer.writeheader()
+        for row in results:
+            writer.writerow(row)
+
+if __name__ == "__main__":
+    bw_trace = read_bandwidth_trace(BW_TRACE_FILE)
+    if len(bw_trace) < 1000:
+        bw_trace = [DEFAULT_BITRATE for _ in range(1000)]
+
+    results = simulate_prefetch_multi_buffer(
+        user_trace=USER_TRACE,
+        bw_trace=bw_trace,
+        segment_duration=SEGMENT_DURATION,
+        video_bitrate=DEFAULT_BITRATE,
+        monitoring_window=MONITORING_WINDOW,
+        startup_buf_segments=STARTUP_BUF_SEGMENTS,
+        k_next=K_NEXT
+    )
+
+    export_results_to_csv(results, CSV_OUTPUT_FILE)
+
+    print("Kết quả mô phỏng từng video:")
+    for row in results:
+        print(row)
