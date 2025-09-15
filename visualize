@@ -1,0 +1,27 @@
+import pandas as pd
+import matplotlib.pyplot as plt
+
+# Đọc kết quả mô phỏng
+df = pd.read_csv("simulation_results.csv")
+
+# Vẽ biểu đồ QoE từng video
+plt.figure(figsize=(10,6))
+plt.plot(df['video_index'], df['QoE'], marker='o', label='QoE')
+plt.xlabel('Video Index')
+plt.ylabel('QoE')
+plt.title('Biểu đồ QoE từng video')
+plt.grid(True)
+plt.legend()
+plt.show()
+
+# Vẽ biểu đồ start-up delay, rebuffer, waste
+plt.figure(figsize=(10,6))
+plt.plot(df['video_index'], df['startup_delay'], marker='o', label='Startup Delay')
+plt.plot(df['video_index'], df['rebuffer_time'], marker='o', label='Rebuffer Time')
+plt.plot(df['video_index'], df['waste'], marker='o', label='Waste')
+plt.xlabel('Video Index')
+plt.ylabel('Thời gian (giây)')
+plt.title('Trực quan hóa delay, rebuffer, waste')
+plt.legend()
+plt.grid(True)
+plt.show()
