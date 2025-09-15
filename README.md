@@ -12,3 +12,13 @@ The MBAP algorithm is designed to optimize short-form video streaming platforms 
 - **User behavior awareness:** Prefetching strategy adapts if users linger longer or skip quickly, optimizing resource usage.
 - **Machine learning integration (optional):** Predicts which videos are likely to be played next, allowing targeted prefetching for maximum efficiency.
 - **QoE optimization:** MBAP tracks startup delay, rebuffering, and buffer waste, constantly tuning its parameters to maximize Quality of Experience.
+
+  ## Contact
+
+For further questions and collaboration, please contact:
+
+- **Name:** Bui Anh Thu 
+- **GitHub:** [BuiAnhThu00](https://github.com/BuiAnhThu00)  
+- **Email:** mnianhthu@gmail.com
+
+---
